@@ -1,0 +1,10 @@
+*
+!**/
+!*.*
+nimcache/
+*.o
+*.exe
+*.so
+*.dylib
+*.zip
+.DS_Store
