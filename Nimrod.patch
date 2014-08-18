@@ -1,0 +1,172 @@
+From 7ccfe1eeaf4c6d9b676ec01510993785b7e88748 Mon Sep 17 00:00:00 2001
+From: Clay Sweetser <clay.sweetser@gmail.com>
+Date: Sun, 17 Aug 2014 22:20:32 -0400
+Subject: [PATCH] Diff
+
+---
+ lib/pure/asyncdispatch.nim |  6 ++---
+ lib/system/widestrs.nim    | 26 +++++++++++++++----
+ lib/windows/winlean.nim    | 62 ++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 86 insertions(+), 8 deletions(-)
+
+diff --git a/lib/pure/asyncdispatch.nim b/lib/pure/asyncdispatch.nim
+index 5597acf..276bba9 100644
+--- a/lib/pure/asyncdispatch.nim
++++ b/lib/pure/asyncdispatch.nim
+@@ -199,8 +199,8 @@ when defined(windows) or defined(nimdoc):
+     TCompletionKey = dword
+ 
+     TCompletionData* = object
+-      sock: TAsyncFD
+-      cb: proc (sock: TAsyncFD, bytesTransferred: DWORD,
++      sock*: TAsyncFD
++      cb*: proc (sock: TAsyncFD, bytesTransferred: DWORD,
+                 errcode: TOSErrorCode) {.closure,gcsafe.}
+ 
+     PDispatcher* = ref object of PDispatcherBase
+@@ -210,7 +210,7 @@ when defined(windows) or defined(nimdoc):
+     TCustomOverlapped = object of TOVERLAPPED
+       data*: TCompletionData
+ 
+-    PCustomOverlapped = ref TCustomOverlapped
++    PCustomOverlapped* = ref TCustomOverlapped
+ 
+     TAsyncFD* = distinct int
+ 
+diff --git a/lib/system/widestrs.nim b/lib/system/widestrs.nim
+index cd64ff4..1d4419f 100644
+--- a/lib/system/widestrs.nim
++++ b/lib/system/widestrs.nim
+@@ -15,7 +15,8 @@ when not declared(NimString):
+ 
+ type
+   TUtf16Char* = distinct int16
+-  WideCString* = ref array[0.. 1_000_000, TUtf16Char]
++  WideCharBuffer* {.unchecked.} = array[1, TUtf16Char]
++  WideCString* = ref WideCharBuffer
+ 
+ proc len*(w: WideCString): int =
+   ## returns the length of a widestring. This traverses the whole string to
+@@ -113,11 +114,9 @@ proc newWideCString*(s: cstring): WideCString =
+ proc newWideCString*(s: string): WideCString =
+   result = newWideCString(s, s.len)
+ 
+-proc `$`*(w: WideCString, estimate: int): string =
+-  result = newStringOfCap(estimate + estimate shr 2)
+-
++template wideStringifyImpl*(condition: expr) {.dirty.} =
+   var i = 0
+-  while w[i].int16 != 0'i16:
++  while condition:
+     var ch = w[i].int
+     inc i
+     if ch >=% UNI_SUR_HIGH_START and ch <=% UNI_SUR_HIGH_END:
+@@ -149,5 +148,22 @@ proc `$`*(w: WideCString, estimate: int): string =
+       result.add chr(0xFFFD shr 6 and ones(6) or 0b10_0000_00)
+       result.add chr(0xFFFD and ones(6) or 0b10_0000_00)
+ 
++proc `$`*(w: WideCString, result: var string) =
++  wideStringifyImpl(w[i].int16 != 0'i16)
++
++proc `$`*(w: WideCString, estimate: int): string =
++  result = newStringOfCap(estimate + estimate shr 2)
++  `$`(w, result)
++
+ proc `$`*(s: WideCString): string =
+   result = s $ 80
++
++proc `$`*(w: WideCharBuffer, length: int, result: var string) =
++  wideStringifyImpl(i < length)
++
++proc `$`*(w: WideCharBuffer, length: int, estimate: int): string =
++  result = newStringOfCap(estimate + estimate shr 2)
++  `$`(w, length, result)
++
++proc `$`*(s: WideCharBuffer, length: int): string =
++  result = `$`(s, length, length)
+\ No newline at end of file
+diff --git a/lib/windows/winlean.nim b/lib/windows/winlean.nim
+index 09696b6..f9378ad 100644
+--- a/lib/windows/winlean.nim
++++ b/lib/windows/winlean.nim
+@@ -582,10 +582,15 @@ const
+ 
+   FILE_FLAG_BACKUP_SEMANTICS* = 33554432'i32
+   FILE_FLAG_OPEN_REPARSE_POINT* = 0x00200000'i32
++  FILE_FLAG_OVERLAPPED* = 0x40000000'i32
++  FILE_LIST_DIRECTORY* = 0x00000001
+ 
+ # Error Constants
+ const
+   ERROR_ACCESS_DENIED* = 5
++  ERROR_OPERATION_ABORTED* = 995
++  ERROR_NOTIFY_ENUM_DIR* = 1022
++
+ 
+ when useWinUnicode:
+   proc createFileW*(lpFileName: WideCString, dwDesiredAccess, dwShareMode: DWORD,
+@@ -728,3 +733,60 @@ proc getSystemTimes*(lpIdleTime, lpKernelTime,
+ proc getProcessTimes*(hProcess: THandle; lpCreationTime, lpExitTime,
+   lpKernelTime, lpUserTime: var TFILETIME): WINBOOL {.stdcall,
+   dynlib: "kernel32", importc: "GetProcessTimes".}
++
++type
++  LPOVERLAPPED_COMPLETION_ROUTINE* = proc (
++    para1: Dword,
++    para2: Dword,
++    para3: POverlapped
++  ){.stdcall.}
++
++  FILE_NOTIFY_INFORMATION* {.pure.} = object 
++    NextEntryOffset* : DWORD
++    Action*          : DWORD
++    FileNameLength*  : DWORD
++    FileName*        : WideCharBuffer
++
++const
++  FILE_NOTIFY_CHANGE_FILE_NAME*   : DWORD = 0x00000001
++  FILE_NOTIFY_CHANGE_DIR_NAME*    : DWORD = 0x00000002
++  FILE_NOTIFY_CHANGE_ATTRIBUTES*  : DWORD = 0x00000004
++  FILE_NOTIFY_CHANGE_SIZE*        : DWORD = 0x00000008
++  FILE_NOTIFY_CHANGE_LAST_WRITE*  : DWORD = 0x00000010
++  FILE_NOTIFY_CHANGE_LAST_ACCESS* : DWORD = 0x00000020
++  FILE_NOTIFY_CHANGE_CREATION*    : DWORD = 0x00000040
++  FILE_NOTIFY_CHANGE_SECURITY*    : DWORD = 0x00000100
++  
++  FILE_ACTION_ADDED*              : DWORD = 0x00000001
++  FILE_ACTION_REMOVED*            : DWORD = 0x00000002
++  FILE_ACTION_MODIFIED*           : DWORD = 0x00000003
++  FILE_ACTION_RENAMED_OLD_NAME*   : DWORD = 0x00000004
++  FILE_ACTION_RENAMED_NEW_NAME*   : DWORD = 0x00000005
++
++
++
++
++proc ReadDirectoryChangesW*(
++  hDirectory: THandle,
++  lpBuffer: pointer,
++  nBufferLength: DWORD,
++  bWatchSubtree: WINBOOL,
++  dwNotifyFilter: DWORD,
++  lpBytesReturned: PDWORD,
++  lpOverlapped: POverlapped,
++  lpCompletionRoutine: LPOVERLAPPED_COMPLETION_ROUTINE
++): WINBOOL {.stdcall, importc: "ReadDirectoryChangesW", dynlib: "Kernel32.dll".}
++
++proc CancelIo*(hFile: THandle): WINBOOL 
++  {.stdcall, importc:"CancelIo", dynlib:"Kernel32.dll".}
++
++const
++  FILE_NAME_NORMALIZED: Dword = 0x0
++  FILE_NAME_OPENED: Dword = 0x8
++
++proc GetFinalPathNameByHandle*(hFile: THandle,  lpszFilePath: pointer,
++                              cchFilePath, dwFlags: Dword): Dword
++  {.stdcall, dynlib: "kernel32", importc: "GetFinalPathNameByHandleW".}
++
++proc SetLastError*(error: Dword)
++  {.stdcall, dynlib: "kernel32", importc: "SetLastError".}
+\ No newline at end of file
+-- 
+1.8.0.msysgit.0
+
