@@ -101,10 +101,6 @@ iterator getChanges(buffer: pointer): tuple[path: string, event: FileEvent] =
     result.path.setLen(nameLength)
     `$`(data.FileName, nameLength, result.path)
     result.event = data.Action.toFileEvent()
-    echo("event address: ", cast[int](addr(result.event)))
-    echo("event: ", result.event)
-    echo("path address: ", cast[int](addr(result.path)))
-    echo("path: ", `$`(data.FileName, nameLength))
     yield result
 
     if offset == 0:
