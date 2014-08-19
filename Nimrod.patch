@@ -1,13 +1,13 @@
-From 7ccfe1eeaf4c6d9b676ec01510993785b7e88748 Mon Sep 17 00:00:00 2001
+From 4d72bd555c315865b8892a5b05a13d4f6bc75132 Mon Sep 17 00:00:00 2001
 From: Clay Sweetser <clay.sweetser@gmail.com>
 Date: Sun, 17 Aug 2014 22:20:32 -0400
-Subject: [PATCH] Diff
+Subject: [PATCH] Cleaned up redundant stringify procedure.
 
 ---
  lib/pure/asyncdispatch.nim |  6 ++---
- lib/system/widestrs.nim    | 26 +++++++++++++++----
+ lib/system/widestrs.nim    | 23 +++++++++++++----
  lib/windows/winlean.nim    | 62 ++++++++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 86 insertions(+), 8 deletions(-)
+ 3 files changed, 83 insertions(+), 8 deletions(-)
 
 diff --git a/lib/pure/asyncdispatch.nim b/lib/pure/asyncdispatch.nim
 index 5597acf..276bba9 100644
@@ -34,7 +34,7 @@ index 5597acf..276bba9 100644
      TAsyncFD* = distinct int
  
 diff --git a/lib/system/widestrs.nim b/lib/system/widestrs.nim
-index cd64ff4..1d4419f 100644
+index cd64ff4..26eb338 100644
 --- a/lib/system/widestrs.nim
 +++ b/lib/system/widestrs.nim
 @@ -15,7 +15,8 @@ when not declared(NimString):
@@ -61,7 +61,7 @@ index cd64ff4..1d4419f 100644
      var ch = w[i].int
      inc i
      if ch >=% UNI_SUR_HIGH_START and ch <=% UNI_SUR_HIGH_END:
-@@ -149,5 +148,22 @@ proc `$`*(w: WideCString, estimate: int): string =
+@@ -149,5 +148,19 @@ proc `$`*(w: WideCString, estimate: int): string =
        result.add chr(0xFFFD shr 6 and ones(6) or 0b10_0000_00)
        result.add chr(0xFFFD and ones(6) or 0b10_0000_00)
  
@@ -78,12 +78,9 @@ index cd64ff4..1d4419f 100644
 +proc `$`*(w: WideCharBuffer, length: int, result: var string) =
 +  wideStringifyImpl(i < length)
 +
-+proc `$`*(w: WideCharBuffer, length: int, estimate: int): string =
-+  result = newStringOfCap(estimate + estimate shr 2)
++proc `$`*(w: WideCharBuffer, length: int): string =
++  result = newStringOfCap(length)
 +  `$`(w, length, result)
-+
-+proc `$`*(s: WideCharBuffer, length: int): string =
-+  result = `$`(s, length, length)
 \ No newline at end of file
 diff --git a/lib/windows/winlean.nim b/lib/windows/winlean.nim
 index 09696b6..f9378ad 100644
