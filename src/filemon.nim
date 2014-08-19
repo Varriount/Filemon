@@ -39,7 +39,6 @@ proc initWatchData(handle: THandle, bufferSize: int): WatchData =
   result.ol.data.sock = TAsyncFd(handle)
   result.buffer = newString(bufferSize)
   GC_ref(result.ol)
-  GC_ref(result.ol)
 
 proc initWatchData(handle: THandle, bufferSize: int, cb: proc): WatchData =
   result = initWatchData(handle, bufferSize)
@@ -97,9 +96,9 @@ iterator getChanges(buffer: pointer): tuple[path: string, event: FileEvent] =
     # moving to the next chunk of data via the offset.
     let
       offset = data.NextEntryOffset
-      nameLength = data.FileNameLength
+      nameLength = data.FileNameLength div sizeof(TUtf16Char)
     result.path.setLen(nameLength)
-    `$`(data.FileName, nameLength, result.path)
+    result.path = `$`(data.FileName, nameLength)
     result.event = data.Action.toFileEvent()
     yield result
 
@@ -108,7 +107,6 @@ iterator getChanges(buffer: pointer): tuple[path: string, event: FileEvent] =
     data = cast[ptr FileNotifyInformation](cast[int](data) + offset)
 
 proc cleanup(data: WatchData) =
-  GC_unref(data.ol)
   GC_unref(data.ol)
   unregister(TAsyncFD(data.handle))
   discard closeHandle(data.handle)
@@ -123,6 +121,7 @@ proc watchFile*(target: string, callback: FileEventCb, filter: set[FileEvent],
   ## are still some differences in the behavior of this procedure across
   ## platforms.
   new(result)
+  result.cancelled = false
   var
     res = result
     targetPath = target
@@ -134,9 +133,8 @@ proc watchFile*(target: string, callback: FileEventCb, filter: set[FileEvent],
     bufferSize = Dword(bufferLen * sizeOf(char))
     rawFilter = toDword(filter) # Filter passed to readDirectoryChanges
 
+    liveWatch: WatchData
     deadWatches = newSeq[WatchData]() # Sequence of dead watch data
-    liveWatch = initWatchData(parentHandle, bufferLen) # The current watch
-
     lastEventWasRenamed = false
 
   proc rawEventCb(sock: TAsyncFD, bytesCount: DWord, errcode: TOSErrorCode) {.closure, gcsafe.} =
@@ -218,10 +216,8 @@ proc watchFile*(target: string, callback: FileEventCb, filter: set[FileEvent],
 
 
   # GC_ref(ol)
-  liveWatch.ol.data = TCompletionData(
-    sock: TAsyncFD(parentHandle), 
-    cb: rawEventCb
-  )
+  liveWatch = initWatchData(parentHandle, bufferLen, rawEventCb) # The current watch
+
 
   register(TAsyncFD(parentHandle))
   if callChanges(liveWatch, bufferSize, rawFilter) == WinBool(false):
