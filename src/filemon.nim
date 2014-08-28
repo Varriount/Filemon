@@ -30,7 +30,7 @@ const
 
 proc initWatchData(handle: THandle, bufferSize: int): WatchData =
   ## Initializes a watch data object. **Note**: The overlapped structure's
-  ## refcount is incremented twice. You **must** use the cleanup procedure
+  ## refcount is incremented. You **must** use the cleanup procedure
   ## to cleanup the data's internal structures.
   new(result)
   new(result.ol)
@@ -73,12 +73,13 @@ proc toDword(actions: set[FileEvent]): dword =
     of feNameChangedOld:
       result = result or FILE_ACTION_RENAMED_NEW_NAME
 
-proc callChanges(w: WatchData, bufferSize: Dword, filter: Dword): WinBool =
+proc callChanges(w: WatchData, bufferSize: Dword,
+                 filter: Dword, recursive=true): WinBool =
   result = ReadDirectoryChangesW(
     w.handle,
     cast[pointer](w.buffer),
     bufferSize,
-    WinBool(false),
+    WinBool(recursive),
     filter,
     cast[ptr dword](nil),
     cast[POverlapped](w.ol),
@@ -106,11 +107,70 @@ iterator getChanges(buffer: pointer): tuple[path: string, event: FileEvent] =
       break
     data = cast[ptr FileNotifyInformation](cast[int](data) + offset)
 
-proc cleanup(data: WatchData) =
+proc cleanup(data: var WatchData) =
   GC_unref(data.ol)
   unregister(TAsyncFD(data.handle))
   discard closeHandle(data.handle)
+  data.ol.data.reset()
   data.ol = nil
+
+proc watchDir*(target: string, callback: FileEventCb, filter: set[FileEvent],
+               bufferLen: int, recursive=true): ChangeHandle =
+  ## Watch a directory for changes, using ReadDirectoryChangesW
+  ## on Windows, inotify on Linux, and KQueues on OpenBSD/MacOSX. Note that
+  ## although this procedure attempts to abstract away the behavioral
+  ## differences in file event notifications across various platforms, there
+  ## are still some differences in the behavior of this procedure across
+  ## platforms.
+  new(result)
+  var
+    res = result
+    targetPath = target
+    targetHandle = openDirHandle(targetPath)
+
+    bufferSize = Dword(bufferLen * sizeOf(char))
+    rawFilter = toDword(filter) # Filter passed to readDirectoryChanges
+
+    liveWatch: WatchData
+
+  proc rawEventCb(sock: TAsyncFD, bytesCount: DWord, errcode: TOSErrorCode) {.closure, gcsafe.} =
+    # GC_fullcollect()
+    GC_ref(liveWatch.ol)
+    assert(THandle(sock) == liveWatch.handle)
+
+    var overflowed: bool
+    if errcode == TOSErrorCode(ERROR_OPERATION_ABORTED):
+      cleanup(liveWatch)
+      liveWatch = nil
+      return
+    elif errcode == ERROR_NOTIFY_ENUM_DIR.TOSErrorCode:
+      overflowed = true
+
+      # Things to do if we aren't cancelled
+    if not res.cancelled:
+      for path, event in getChanges(cast[pointer](liveWatch.buffer)):
+        if res.cancelled:
+          break
+        discard callback(path, event, overflowed)
+      if callChanges(liveWatch, bufferSize, rawFilter) == WinBool(false):
+        let error = osLastError()
+        cleanup(liveWatch)
+        osError(error)
+    if res.cancelled:
+      discard cancelIo(targetHandle)
+
+  # GC_ref(ol)
+  liveWatch = initWatchData(targetHandle, bufferLen, rawEventCb) # The current watch
+
+  register(TAsyncFD(targetHandle))
+  if callChanges(liveWatch, bufferSize, rawFilter) == WinBool(false):
+    let error = osLastError()
+    cleanup(liveWatch)
+    osError(error)
+
+  result.kind = pcDir
+  result.handle = targetHandle
+  result.callback = callback
 
 proc watchFile*(target: string, callback: FileEventCb, filter: set[FileEvent],
                 bufferLen: int): ChangeHandle =
